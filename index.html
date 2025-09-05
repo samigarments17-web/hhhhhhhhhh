@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>My WhatsApp Clone</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #eee;
+    }
+    .sidebar {
+      width: 250px;
+      background: #222;
+      height: 100vh;
+      float: left;
+      padding: 10px;
+    }
+    .chat-area {
+      margin-left: 250px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .tabs { display: flex; }
+    .tab {
+      flex: 1;
+      text-align: center;
+      padding: 10px;
+      cursor: pointer;
+      background: #333;
+    }
+    .tab.active { background: #444; }
+    #friendList, #chatList {
+      height: calc(100vh - 80px);
+      overflow-y: auto;
+    }
+    .chat-box {
+      flex: 1;
+      background: #000;
+      padding: 10px;
+      overflow-y: auto;
+    }
+    .input-area {
+      display: flex;
+      padding: 10px;
+      background: #222;
+    }
+    .input-area input { flex: 1; padding: 8px; }
+    .input-area button { margin-left: 5px; }
+    video {
+      width: 200px;
+      border: 2px solid #666;
+      margin: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h2>Welcome</h2>
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('friends')">Friends</div>
+      <div class="tab" onclick="showTab('chats')">Chats</div>
+    </div>
+    <div id="friendList">
+      <input type="text" id="friendNumber" placeholder="Enter contact number">
+      <input type="text" id="friendName" placeholder="Enter friend name">
+      <button onclick="addFriend()">Add Friend</button>
+      <ul id="friends"></ul>
+    </div>
+    <div id="chatList" style="display:none;">
+      <ul id="chats"></ul>
+    </div>
+  </div>
+
+  <div class="chat-area">
+    <div class="chat-box" id="messages"></div>
+    <div class="input-area">
+      <input id="msgInput" placeholder="Type a message...">
+      <button onclick="sendMessage()">Send</button>
+      <button onclick="startCall(false)">📞</button>
+      <button onclick="startCall(true)">🎥</button>
+    </div>
+    <div>
+      <video id="localVideo" autoplay muted></video>
+      <video id="remoteVideo" autoplay></video>
+    </div>
+  </div>
+
+<script>
+let ws = new WebSocket("wss://YOUR-SERVER-IP:8080"); // change server address
+let currentFriend = null;
+let peerConnection;
+let localStream;
+
+function showTab(tab) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  if (tab === "friends") {
+    document.querySelectorAll(".tab")[0].classList.add("active");
+    document.getElementById("friendList").style.display = "block";
+    document.getElementById("chatList").style.display = "none";
+  } else {
+    document.querySelectorAll(".tab")[1].classList.add("active");
+    document.getElementById("friendList").style.display = "none";
+    document.getElementById("chatList").style.display = "block";
+  }
+}
+
+function addFriend() {
+  let num = document.getElementById("friendNumber").value;
+  let name = document.getElementById("friendName").value;
+  if (num && name) {
+    let li = document.createElement("li");
+    li.textContent = name + " (" + num + ")";
+    li.onclick = () => { currentFriend = num; document.getElementById("messages").innerHTML = ""; };
+    document.getElementById("friends").appendChild(li);
+
+    let chatLi = document.createElement("li");
+    chatLi.textContent = name;
+    chatLi.onclick = () => { currentFriend = num; document.getElementById("messages").innerHTML = ""; };
+    document.getElementById("chats").appendChild(chatLi);
+  }
+}
+
+function sendMessage() {
+  let msg = document.getElementById("msgInput").value;
+  if (!msg || !currentFriend) return;
+  ws.send(JSON.stringify({type:"message", to:currentFriend, text:msg}));
+  addMessage("Me: " + msg);
+  document.getElementById("msgInput").value = "";
+}
+
+function addMessage(text) {
+  let div = document.createElement("div");
+  div.textContent = text;
+  document.getElementById("messages").appendChild(div);
+}
+
+ws.onmessage = (event) => {
+  let data = JSON.parse(event.data);
+  if (data.type === "message") {
+    addMessage(data.from + ": " + data.text);
+  } else if (data.type === "offer") {
+    handleOffer(data.offer, data.from);
+  } else if (data.type === "answer") {
+    peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+  } else if (data.type === "candidate") {
+    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+  }
+};
+
+async function startCall(video) {
+  peerConnection = new RTCPeerConnection();
+  peerConnection.onicecandidate = e => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({type:"candidate", to:currentFriend, candidate:e.candidate}));
+    }
+  };
+  peerConnection.ontrack = e => {
+    document.getElementById("remoteVideo").srcObject = e.streams[0];
+  };
+  localStream = await navigator.mediaDevices.getUserMedia({video: video, audio: true});
+  document.getElementById("localVideo").srcObject = localStream;
+  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  let offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  ws.send(JSON.stringify({type:"offer", to:currentFriend, offer}));
+}
+
+async function handleOffer(offer, from) {
+  currentFriend = from;
+  peerConnection = new RTCPeerConnection();
+  peerConnection.onicecandidate = e => {
+    if (e.candidate) {
+      ws.send(JSON.stringify({type:"candidate", to:from, candidate:e.candidate}));
+    }
+  };
+  peerConnection.ontrack = e => {
+    document.getElementById("remoteVideo").srcObject = e.streams[0];
+  };
+  localStream = await navigator.mediaDevices.getUserMedia({video:true, audio:true});
+  document.getElementById("localVideo").srcObject = localStream;
+  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+  let answer = await peerConnection.createAnswer();
+  await peerConnection.setLocalDescription(answer);
+  ws.send(JSON.stringify({type:"answer", to:from, answer}));
+}
+</script>
+</body>
+</html>
